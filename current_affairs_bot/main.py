@@ -17,7 +17,7 @@ def daily_pipeline():
     print(f"\n{'='*50}\n[Pipeline] {today}\n{'='*50}")
 
     print("\n── 1/3  Fetch RSS ──")
-    fetch_rss(since=today)
+    fetch_rss()
 
     print("\n── 2/3  Generate questions ──")
     n = generate_for_date(today, n=QUESTIONS_PER_DAY)
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     elif args.cmd == "send":     send_daily(datetime.utcnow().strftime("%Y-%m-%d"))
     elif args.cmd == "once":
         d = args.date or datetime.utcnow().strftime("%Y-%m-%d")
-        fetch_rss(since=d)
+        fetch_rss()
         generate_for_date(d)
         send_daily(d, force=args.force)
     else:
