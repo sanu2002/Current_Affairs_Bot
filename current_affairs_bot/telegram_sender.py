@@ -40,12 +40,22 @@ def esc(s: str) -> str:
 #  Message builders  (replicating the PDF layout)
 # ─────────────────────────────────────────────────────────
 
-def _header(date_str: str, total: int) -> str:
-    dt  = datetime.strptime(date_str, "%Y-%m-%d")
-    day = dt.strftime("%d %B %Y").upper()
+def _header(date_str: str, total: int, kind: str = "daily", week_end: str = None) -> str:
+    """
+    kind="daily"  -> "DAILY CURRENT AFFAIRS — 11 MAY 2026"
+    kind="weekly" -> "WEEKLY CURRENT AFFAIRS — 01 JAN to 07 JAN 2026"
+    """
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    if kind == "weekly" and week_end:
+        end_dt = datetime.strptime(week_end, "%Y-%m-%d")
+        label  = f"{dt.strftime('%d %b').upper()} TO {end_dt.strftime('%d %b %Y').upper()}"
+        title  = "WEEKLY CURRENT AFFAIRS"
+    else:
+        label  = dt.strftime("%d %B %Y").upper()
+        title  = "DAILY CURRENT AFFAIRS"
     return (
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🗞️ *CURRENT AFFAIRS — {esc(day)}*\n"
+        f"🗞️ *{esc(title)} — {esc(label)}*\n"
         f"📋 *{total} Questions \\| UPSC Prelims Style*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -150,7 +160,8 @@ def _send(text: str) -> bool:
     return False
 
 
-def send_daily(date_str: str, force: bool = False) -> bool:
+def send_daily(date_str: str, force: bool = False,
+               kind: str = "daily", week_end: str = None) -> bool:
     if not force and already_sent(date_str):
         print(f"[Sender] Already sent for {date_str}.")
         return False
@@ -163,7 +174,7 @@ def send_daily(date_str: str, force: bool = False) -> bool:
     print(f"[Sender] Sending {len(rows)} questions for {date_str} …")
 
     # ── Header ──
-    _send(_header(date_str, len(rows)))
+    _send(_header(date_str, len(rows), kind=kind, week_end=week_end))
     time.sleep(1.5)
 
     # ── One message per question ──

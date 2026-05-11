@@ -1,16 +1,22 @@
 name: Backfill Current Affairs
 
 on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC = 08:30 IST (30 min after daily)
   workflow_dispatch:
     inputs:
       start:
-        description: "Start date (YYYY-MM-DD)"
+        description: "Start date (YYYY-MM-DD) — ignored if backfill_state.json exists"
         required: false
         default: "2026-01-01"
       end:
         description: "End date (YYYY-MM-DD, blank = today)"
         required: false
         default: ""
+      max_weeks:
+        description: "Max weeks to process this run"
+        required: false
+        default: "1"
       no_send:
         description: "Generate only, don't send to Telegram"
         required: false
@@ -19,15 +25,14 @@ on:
         options:
           - "false"
           - "true"
-      pause:
-        description: "Seconds between weeks (rate-limit guard)"
-        required: false
-        default: "75"
+
+permissions:
+  contents: write
 
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     defaults:
       run:
@@ -36,6 +41,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -47,18 +54,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run backfill
+      - name: Run backfill (one week per run)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PYTHONIOENCODING: "utf-8"
+          INPUT_START: ${{ inputs.start || '2026-01-01' }}
+          INPUT_END: ${{ inputs.end }}
+          INPUT_MAX_WEEKS: ${{ inputs.max_weeks || '1' }}
+          INPUT_NO_SEND: ${{ inputs.no_send || 'false' }}
         run: |
-          ARGS="--start ${{ inputs.start }} --pause ${{ inputs.pause }}"
-          if [ -n "${{ inputs.end }}" ]; then
-            ARGS="$ARGS --end ${{ inputs.end }}"
+          ARGS="--start $INPUT_START --max-weeks $INPUT_MAX_WEEKS"
+          if [ -n "$INPUT_END" ]; then
+            ARGS="$ARGS --end $INPUT_END"
           fi
-          if [ "${{ inputs.no_send }}" = "true" ]; then
+          if [ "$INPUT_NO_SEND" = "true" ]; then
             ARGS="$ARGS --no-send"
           fi
           python backfill.py $ARGS
+
+      - name: Commit state file
+        run: |
+          if [ -f backfill_state.json ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add backfill_state.json
+            if git diff --cached --quiet; then
+              echo "No state changes to commit."
+            else
+              git commit -m "chore(backfill): advance state [skip ci]"
+              git push
+            fi
+          fi
