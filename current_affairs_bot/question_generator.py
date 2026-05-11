@@ -120,7 +120,7 @@ def _call_claude(articles: list, n: int) -> list:
     try:
         resp = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=4096,
+            max_tokens=16000,
             system=SYSTEM,
             messages=[{"role": "user", "content": prompt}],
         )
