@@ -1,0 +1,64 @@
+name: Backfill Current Affairs
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Start date (YYYY-MM-DD)"
+        required: false
+        default: "2026-01-01"
+      end:
+        description: "End date (YYYY-MM-DD, blank = today)"
+        required: false
+        default: ""
+      no_send:
+        description: "Generate only, don't send to Telegram"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      pause:
+        description: "Seconds between weeks (rate-limit guard)"
+        required: false
+        default: "75"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        working-directory: current_affairs_bot
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: current_affairs_bot/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run backfill
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          ARGS="--start ${{ inputs.start }} --pause ${{ inputs.pause }}"
+          if [ -n "${{ inputs.end }}" ]; then
+            ARGS="$ARGS --end ${{ inputs.end }}"
+          fi
+          if [ "${{ inputs.no_send }}" = "true" ]; then
+            ARGS="$ARGS --no-send"
+          fi
+          python backfill.py $ARGS

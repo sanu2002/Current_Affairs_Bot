@@ -44,7 +44,7 @@ def run_backfill(
     start: str = BACKFILL_START,
     end:   str = None,
     send:  bool = True,
-    pause: int  = 5,       # seconds between weeks (rate limits)
+    pause: int  = 75,      # seconds between weeks (Anthropic 10k tpm tier)
 ):
     init_db()
     if end is None:
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     ap.add_argument("--start",   default=BACKFILL_START, help="Start date YYYY-MM-DD")
     ap.add_argument("--end",     default=None,           help="End date YYYY-MM-DD (default: today)")
     ap.add_argument("--no-send", action="store_true",    help="Generate but don't send to Telegram")
-    ap.add_argument("--pause",   type=int, default=5,    help="Seconds between weeks (default: 5)")
+    ap.add_argument("--pause",   type=int, default=75,   help="Seconds between weeks (default: 75)")
     args = ap.parse_args()
 
     run_backfill(

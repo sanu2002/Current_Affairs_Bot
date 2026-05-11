@@ -9,6 +9,8 @@
 
 import feedparser
 import json
+import re
+import time
 import anthropic
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -90,52 +92,73 @@ Return ONLY a valid JSON array of 15 objects. No markdown, no preamble.
 """
 
 
-def fetch_historical(week_start: str, week_end: str) -> list:
+def _extract_json_array(text: str) -> str:
+    """Find the JSON array inside Claude's response (handles prose/markdown wrappers)."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:])
+    start = text.find("[")
+    end   = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        return text[start:end + 1]
+    return text
+
+
+def fetch_historical(week_start: str, week_end: str, max_retries: int = 4) -> list:
     """
     Call Claude with web_search to find news for a specific week.
+    Retries with exponential backoff on rate-limit (429) errors.
     Returns list of article dicts saved to DB.
     """
     print(f"[Search] Fetching news for week {week_start} → {week_end} …")
     prompt = SEARCH_PROMPT.format(start=week_start, end=week_end)
 
-    try:
-        resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        # Extract text from all content blocks
+    backoff = 30
+    for attempt in range(1, max_retries + 1):
         text = ""
-        for block in resp.content:
-            if hasattr(block, "text"):
-                text += block.text
+        try:
+            resp = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=4000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-        # Strip markdown fences if present
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text  = "\n".join(lines[1:-1])
+            for block in resp.content:
+                if hasattr(block, "text"):
+                    text += block.text
 
-        articles = json.loads(text)
-        print(f"[Search] Got {len(articles)} articles for {week_start}–{week_end}.")
+            payload = _extract_json_array(text)
+            articles = json.loads(payload)
+            print(f"[Search] Got {len(articles)} articles for {week_start}–{week_end}.")
 
-        saved = []
-        for a in articles:
-            title   = a.get("title", "").strip()
-            summary = a.get("summary", "").strip()
-            date    = a.get("date", week_start)
-            cat     = a.get("category", "Misc")
-            url     = f"search://{week_start}/{title[:60].replace(' ', '-')}"
-            save_article(url, title, summary, f"Web Search ({cat})", date)
-            saved.append({"title": title, "summary": summary, "pub_date": date, "category": cat})
+            saved = []
+            for a in articles:
+                title   = a.get("title", "").strip()
+                summary = a.get("summary", "").strip()
+                date    = a.get("date", week_start)
+                cat     = a.get("category", "Misc")
+                url     = f"search://{week_start}/{title[:60].replace(' ', '-')}"
+                save_article(url, title, summary, f"Web Search ({cat})", date)
+                saved.append({"title": title, "summary": summary, "pub_date": date, "category": cat})
 
-        return saved
+            return saved
 
-    except json.JSONDecodeError:
-        print(f"[Search] JSON parse failed. Raw:\n{text[:400]}")
-        return []
-    except Exception as e:
-        print(f"[Search] Error: {e}")
-        return []
+        except anthropic.RateLimitError as e:
+            if attempt == max_retries:
+                print(f"[Search] Rate-limit hit and out of retries: {e}")
+                return []
+            print(f"[Search] Rate-limit (attempt {attempt}/{max_retries}). Sleeping {backoff}s …")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 240)
+
+        except json.JSONDecodeError:
+            print(f"[Search] JSON parse failed. Raw start: {text[:300]!r}")
+            return []
+
+        except Exception as e:
+            print(f"[Search] Error: {e}")
+            return []
+
+    return []
