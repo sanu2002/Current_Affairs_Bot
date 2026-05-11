@@ -5,7 +5,7 @@
 #  Feb–March Current Affairs PDF sample.
 # ============================================================
 
-import json, anthropic
+import json, time, anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, QUESTIONS_PER_DAY
 from database import get_unused_articles, mark_used, save_questions, get_questions
 
@@ -115,27 +115,37 @@ def _user_prompt(articles: list, n: int) -> str:
     )
 
 
-def _call_claude(articles: list, n: int) -> list:
+def _call_claude(articles: list, n: int, max_retries: int = 4) -> list:
     prompt = _user_prompt(articles, n)
-    try:
-        resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=16000,
-            system=SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = resp.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = "\n".join(raw.split("\n")[1:])
-            if raw.endswith("```"):
-                raw = raw[:-3]
-        return json.loads(raw.strip())
-    except json.JSONDecodeError as e:
-        print(f"[Gen] JSON error: {e}")
-        return []
-    except Exception as e:
-        print(f"[Gen] API error: {e}")
-        return []
+    backoff = 30
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=16000,
+                system=SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = resp.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = "\n".join(raw.split("\n")[1:])
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+            return json.loads(raw.strip())
+        except anthropic.RateLimitError as e:
+            if attempt == max_retries:
+                print(f"[Gen] Rate-limit and out of retries: {e}")
+                return []
+            print(f"[Gen] Rate-limit (attempt {attempt}/{max_retries}). Sleeping {backoff}s …")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 240)
+        except json.JSONDecodeError as e:
+            print(f"[Gen] JSON error: {e}")
+            return []
+        except Exception as e:
+            print(f"[Gen] API error: {e}")
+            return []
+    return []
 
 
 def generate_for_date(date_str: str, articles: list = None, n: int = None) -> int:

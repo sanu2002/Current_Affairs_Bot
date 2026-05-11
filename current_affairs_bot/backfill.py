@@ -101,6 +101,11 @@ def run_backfill(
                 print(f"  [!] No articles found for week {wk_start}. Stopping run.")
                 break
 
+            # Cool down so the per-minute token budget has time to drain
+            # before the question-generation call.
+            print(f"  Cooling down 70s before generation …")
+            time.sleep(70)
+
             count = generate_from_raw_articles(date_label, articles, n=QUESTIONS_PER_DAY)
             if count == 0:
                 print(f"  [!] No questions generated. Stopping run.")
