@@ -5,11 +5,13 @@
 #  Feb–March Current Affairs PDF sample.
 # ============================================================
 
-import json, time, anthropic
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, QUESTIONS_PER_DAY
+import json, time
+import google.generativeai as genai
+from google.api_core import exceptions as gexc
+from config import GEMINI_API_KEY, GEMINI_MODEL, QUESTIONS_PER_DAY
 from database import get_unused_articles, mark_used, save_questions, get_questions
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 # ─────────────────────────────────────────────────────────
 #  System prompt — mirrors PDF format EXACTLY
@@ -115,24 +117,43 @@ def _user_prompt(articles: list, n: int) -> str:
     )
 
 
+def _extract_json_array(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        raw = raw.strip()
+    # Fall back to slicing from first '[' to last ']' in case of stray prose.
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        return raw[start:end + 1]
+    return raw
+
+
 def _call_claude(articles: list, n: int, max_retries: int = 4) -> list:
+    """Name kept for backwards compatibility — now calls Gemini."""
     prompt = _user_prompt(articles, n)
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        system_instruction=SYSTEM,
+        generation_config={
+            "max_output_tokens": 16000,
+            "temperature": 0.7,
+            "response_mime_type": "application/json",
+        },
+    )
     backoff = 30
     for attempt in range(1, max_retries + 1):
         try:
-            resp = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=16000,
-                system=SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = resp.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = "\n".join(raw.split("\n")[1:])
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-            return json.loads(raw.strip())
-        except anthropic.RateLimitError as e:
+            resp = model.generate_content(prompt)
+            raw = (resp.text or "").strip()
+            if not raw:
+                print("[Gen] Empty response from Gemini.")
+                return []
+            return json.loads(_extract_json_array(raw))
+        except gexc.ResourceExhausted as e:
             if attempt == max_retries:
                 print(f"[Gen] Rate-limit and out of retries: {e}")
                 return []

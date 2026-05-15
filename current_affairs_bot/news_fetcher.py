@@ -11,15 +11,16 @@ import feedparser
 import json
 import re
 import time
-import anthropic
+import google.generativeai as genai
+from google.api_core import exceptions as gexc
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 
-from config import RSS_FEEDS, ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import RSS_FEEDS, GEMINI_API_KEY, GEMINI_MODEL
 from database import save_article
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 
 # ─────────────────────────────────────────────────────────
@@ -107,27 +108,28 @@ def _extract_json_array(text: str) -> str:
 
 def fetch_historical(week_start: str, week_end: str, max_retries: int = 4) -> list:
     """
-    Call Claude with web_search to find news for a specific week.
+    Call Gemini with Google Search grounding to find news for a specific week.
     Retries with exponential backoff on rate-limit (429) errors.
     Returns list of article dicts saved to DB.
     """
     print(f"[Search] Fetching news for week {week_start} → {week_end} …")
     prompt = SEARCH_PROMPT.format(start=week_start, end=week_end)
 
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        tools="google_search_retrieval",
+        generation_config={
+            "max_output_tokens": 8000,
+            "temperature": 0.3,
+        },
+    )
+
     backoff = 30
     for attempt in range(1, max_retries + 1):
         text = ""
         try:
-            resp = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=4000,
-                tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            for block in resp.content:
-                if hasattr(block, "text"):
-                    text += block.text
+            resp = model.generate_content(prompt)
+            text = (resp.text or "").strip()
 
             payload = _extract_json_array(text)
             articles = json.loads(payload)
@@ -145,7 +147,7 @@ def fetch_historical(week_start: str, week_end: str, max_retries: int = 4) -> li
 
             return saved
 
-        except anthropic.RateLimitError as e:
+        except gexc.ResourceExhausted as e:
             if attempt == max_retries:
                 print(f"[Search] Rate-limit hit and out of retries: {e}")
                 return []

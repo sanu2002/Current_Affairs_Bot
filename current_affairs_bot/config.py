@@ -6,12 +6,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Credentials ───────────────────────────────────────────
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY",  "YOUR_ANTHROPIC_API_KEY")
+GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY",     "YOUR_GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "@your_channel")
 
 # ── Model ─────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # ── Schedule ──────────────────────────────────────────────
 SEND_TIME         = "08:00"   # 24h HH:MM (IST)
