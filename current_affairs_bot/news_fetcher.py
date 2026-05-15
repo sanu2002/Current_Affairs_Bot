@@ -11,8 +11,8 @@ import feedparser
 import json
 import re
 import time
-import google.generativeai as genai
-from google.api_core import exceptions as gexc
+from google import genai
+from google.genai import types, errors
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 from config import RSS_FEEDS, GEMINI_API_KEY, GEMINI_MODEL
 from database import save_article
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ─────────────────────────────────────────────────────────
@@ -106,6 +106,11 @@ def _extract_json_array(text: str) -> str:
     return text
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    return code == 429 or "RESOURCE_EXHAUSTED" in str(exc).upper() or "429" in str(exc)
+
+
 def fetch_historical(week_start: str, week_end: str, max_retries: int = 4) -> list:
     """
     Call Gemini with Google Search grounding to find news for a specific week.
@@ -115,20 +120,21 @@ def fetch_historical(week_start: str, week_end: str, max_retries: int = 4) -> li
     print(f"[Search] Fetching news for week {week_start} → {week_end} …")
     prompt = SEARCH_PROMPT.format(start=week_start, end=week_end)
 
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        tools="google_search_retrieval",
-        generation_config={
-            "max_output_tokens": 8000,
-            "temperature": 0.3,
-        },
+    config = types.GenerateContentConfig(
+        max_output_tokens=8000,
+        temperature=0.3,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
     )
 
     backoff = 30
     for attempt in range(1, max_retries + 1):
         text = ""
         try:
-            resp = model.generate_content(prompt)
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=config,
+            )
             text = (resp.text or "").strip()
 
             payload = _extract_json_array(text)
@@ -147,20 +153,24 @@ def fetch_historical(week_start: str, week_end: str, max_retries: int = 4) -> li
 
             return saved
 
-        except gexc.ResourceExhausted as e:
-            if attempt == max_retries:
-                print(f"[Search] Rate-limit hit and out of retries: {e}")
+        except errors.APIError as e:
+            if _is_rate_limit(e):
+                if attempt == max_retries:
+                    print(f"[Search] Rate-limit hit and out of retries: {e}")
+                    return []
+                print(f"[Search] Rate-limit (attempt {attempt}/{max_retries}). Sleeping {backoff}s …")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 240)
+            else:
+                print(f"[Search] API error: {e}")
                 return []
-            print(f"[Search] Rate-limit (attempt {attempt}/{max_retries}). Sleeping {backoff}s …")
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 240)
 
         except json.JSONDecodeError:
             print(f"[Search] JSON parse failed. Raw start: {text[:300]!r}")
             return []
 
         except Exception as e:
-            print(f"[Search] Error: {e}")
+            print(f"[Search] Unexpected error: {e}")
             return []
 
     return []

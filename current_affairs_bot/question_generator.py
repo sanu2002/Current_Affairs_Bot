@@ -6,12 +6,12 @@
 # ============================================================
 
 import json, time
-import google.generativeai as genai
-from google.api_core import exceptions as gexc
+from google import genai
+from google.genai import types, errors
 from config import GEMINI_API_KEY, GEMINI_MODEL, QUESTIONS_PER_DAY
 from database import get_unused_articles, mark_used, save_questions, get_questions
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ─────────────────────────────────────────────────────────
 #  System prompt — mirrors PDF format EXACTLY
@@ -132,39 +132,49 @@ def _extract_json_array(raw: str) -> str:
     return raw
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    return code == 429 or "RESOURCE_EXHAUSTED" in str(exc).upper() or "429" in str(exc)
+
+
 def _call_claude(articles: list, n: int, max_retries: int = 4) -> list:
     """Name kept for backwards compatibility — now calls Gemini."""
     prompt = _user_prompt(articles, n)
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
+    config = types.GenerateContentConfig(
         system_instruction=SYSTEM,
-        generation_config={
-            "max_output_tokens": 16000,
-            "temperature": 0.7,
-            "response_mime_type": "application/json",
-        },
+        max_output_tokens=16000,
+        temperature=0.7,
+        response_mime_type="application/json",
     )
     backoff = 30
     for attempt in range(1, max_retries + 1):
         try:
-            resp = model.generate_content(prompt)
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=config,
+            )
             raw = (resp.text or "").strip()
             if not raw:
                 print("[Gen] Empty response from Gemini.")
                 return []
             return json.loads(_extract_json_array(raw))
-        except gexc.ResourceExhausted as e:
-            if attempt == max_retries:
-                print(f"[Gen] Rate-limit and out of retries: {e}")
+        except errors.APIError as e:
+            if _is_rate_limit(e):
+                if attempt == max_retries:
+                    print(f"[Gen] Rate-limit and out of retries: {e}")
+                    return []
+                print(f"[Gen] Rate-limit (attempt {attempt}/{max_retries}). Sleeping {backoff}s …")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 240)
+            else:
+                print(f"[Gen] API error: {e}")
                 return []
-            print(f"[Gen] Rate-limit (attempt {attempt}/{max_retries}). Sleeping {backoff}s …")
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 240)
         except json.JSONDecodeError as e:
             print(f"[Gen] JSON error: {e}")
             return []
         except Exception as e:
-            print(f"[Gen] API error: {e}")
+            print(f"[Gen] Unexpected error: {e}")
             return []
     return []
 
